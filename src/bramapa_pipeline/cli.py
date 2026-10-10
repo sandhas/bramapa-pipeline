@@ -41,6 +41,16 @@ CacheDirOpt = Annotated[
     typer.Option("--cache-dir", help="Diretório do cache de downloads (padrão data/raw, gitignored)."),
 ]
 
+RootOpt = Annotated[
+    Path,
+    typer.Option("--root", help="Raiz dos níveis: o nível sai em <root>/<nivel>/<entidade>/ (ex.: 2/estado_43). Padrão data/levels."),
+]
+OutOpt = Annotated[
+    Path | None,
+    typer.Option("--out", help="Diretório explícito do nível (recebe level.toml e chunks/); sobrepõe --root."),
+]
+DEFAULT_ROOT = Path("data/levels")
+
 
 def _setup_logging(verbose: bool) -> None:
     logging.basicConfig(
@@ -141,9 +151,31 @@ def fetch_cmd(
             typer.echo(f"  {key:<36} {path.stat().st_size:>10}  {path}  [{src.licence}]")
 
 
+def _report_build(out: Path, spec, manifest, grid, ts: Tileset, n_chunks: int, total_bytes: int, times: tuple[float, float, float], preview: Path | None, notes: list[str] = ()) -> None:
+    covers = Counter(grid.cover_names().ravel().tolist())
+    cover_txt = ", ".join(f"{k}={v}" for k, v in covers.most_common())
+    objs = Counter(name for _x, _y, name, _f in grid.objects)
+    obj_txt = ", ".join(f"{k}={v}" for k, v in objs.most_common()) or "-"
+    typer.echo(
+        f"{out}: nível {manifest.level} {manifest.entity} \"{manifest.name}\" — {spec.size}x{spec.size} células de "
+        f"{spec.cell_meters:g} m, {manifest.chunks_x}x{manifest.chunks_y} chunks ({n_chunks} arquivos, "
+        f"{total_bytes / 1024:.1f} KiB), {len(grid.entities)} entidades, {len(grid.objects)} objetos ({obj_txt}), "
+        f"tileset={ts.id}@{ts.version}" + (f", período {manifest.period_start}" if manifest.period_start else "")
+    )
+    typer.echo(f"  origem (E, N) = {manifest.origin_x:.1f}, {manifest.origin_y:.1f} em {manifest.crs}, rotação {manifest.rotation_deg:g}°; centro {spec.center_lon:.4f}, {spec.center_lat:.4f}")
+    typer.echo(f"  coberturas: {cover_txt}")
+    t_load, t_grid, t_write = times
+    typer.echo(f"  tempos: leitura {t_load:.1f}s, grade {t_grid:.1f}s, autotile+escrita {t_write:.1f}s")
+    for n in notes:
+        typer.echo(f"  aviso: {n}")
+    if preview is not None:
+        typer.echo(f"  preview: {preview} (espaço da grade: o norte é o canto superior esquerdo)")
+
+
 @app.command("build-level1")
 def build_level1(
-    out: Annotated[Path, typer.Option("--out", help="Diretório do nível (recebe level.toml e chunks/).")],
+    out: OutOpt = None,
+    root: RootOpt = DEFAULT_ROOT,
     tileset: TilesetOpt = None,
     cell_meters: Annotated[float, typer.Option(help="Tamanho da célula no terreno, em metros.")] = 7000.0,
     size: Annotated[int, typer.Option(help="Lado da grade em células.")] = 1024,
@@ -157,12 +189,14 @@ def build_level1(
     """Constrói o nível 1 real (Brasil e vizinhos) a partir dos geodados do cache.
 
     Precisa de `fetch` antes. Grade em EPSG:5880 com eixos rotacionados 45°: a célula (0,0) é a
-    mais ao norte, +x aponta para sudeste e +y para sudoeste no terreno.
+    mais ao norte, +x aponta para sudeste e +y para sudoeste no terreno. Sai em <root>/1/pais_BR/.
     """
+    from .level import level_dir
     from .level1 import GridSpec, build_grid, load_inputs, write_level, write_preview
 
     _setup_logging(verbose)
     ts = _load_tileset(tileset)
+    out = out or level_dir(root, 1, "pais:BR")
     spec = GridSpec(size=size, cell_meters=cell_meters, center_lon=center_lon, center_lat=center_lat)
     t0 = time.perf_counter()
     try:
@@ -177,21 +211,122 @@ def build_level1(
     t_write = time.perf_counter()
     if preview is not None:
         write_preview(grid, preview)
+    _report_build(out, spec, manifest, grid, ts, n_chunks, total_bytes, (t_load - t0, t_grid - t_load, t_write - t_grid), preview)
 
-    covers = Counter(grid.cover_names().ravel().tolist())
-    cover_txt = ", ".join(f"{k}={v}" for k, v in covers.most_common())
-    typer.echo(
-        f"{out}: {size}x{size} células de {cell_meters:g} m, {manifest.chunks_x}x{manifest.chunks_y} chunks "
-        f"({n_chunks} arquivos, {total_bytes / 1024:.1f} KiB), {len(grid.entities)} entidades, "
-        f"{len(grid.objects)} objetos, tileset={ts.id}@{ts.version}"
-    )
-    typer.echo(f"  origem (E, N) = {manifest.origin_x:.1f}, {manifest.origin_y:.1f} em {manifest.crs}, rotação {manifest.rotation_deg:g}°")
-    typer.echo(f"  coberturas: {cover_txt}")
-    typer.echo(
-        f"  tempos: leitura {t_load - t0:.1f}s, grade {t_grid - t_load:.1f}s, autotile+escrita {t_write - t_grid:.1f}s"
-    )
+
+@app.command("build-level2")
+def build_level2(
+    uf: Annotated[int, typer.Option("--uf", help="Código IBGE da UF (2 dígitos), ex.: 43 = Rio Grande do Sul.")],
+    out: OutOpt = None,
+    root: RootOpt = DEFAULT_ROOT,
+    tileset: TilesetOpt = None,
+    cell_meters: Annotated[float | None, typer.Option(help="Tamanho da célula em metros. Sem ele, o menor que faz o estado caber em --size (mínimo 700 m).")] = None,
+    size: Annotated[int, typer.Option(help="Lado da grade em células.")] = 1024,
+    cache_dir: CacheDirOpt = Path("data/raw"),
+    preview: Annotated[Path | None, typer.Option("--preview", help="Escreve um PNG (1 px por célula) das coberturas.")] = None,
+    no_osm: Annotated[bool, typer.Option("--no-osm", help="Não consulta o Overpass; rodovias do Natural Earth.")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Constrói o nível 2 de um estado (MapBiomas ~1 km + malha municipal do IBGE + OSM).
+
+    Precisa de `fetch` antes (Natural Earth e BR_UF_2022); a malha municipal da UF, a janela do
+    MapBiomas e as vias do OSM são baixadas sob demanda para o cache. Sai em <root>/2/estado_NN/.
+    """
+    from . import level2
+    from .level import entity_id
+    from .level1 import write_level, write_preview
+
+    _setup_logging(verbose)
+    ts = _load_tileset(tileset)
+    try:
+        entity_id("estado", uf)
+    except ValueError as e:
+        typer.echo(f"erro: {e}", err=True)
+        raise typer.Exit(code=2) from e
+    out = out or level2.output_dir(root, uf)
+    t0 = time.perf_counter()
+    try:
+        uf_geom, uf_name = level2.load_uf(uf, cache_dir)
+        spec, auto = level2.make_spec(uf_geom, size=size, cell_meters=cell_meters)
+        inputs = level2.load_inputs(spec, uf, uf_name, cache_dir, use_osm=not no_osm)
+    except (FileNotFoundError, ValueError) as e:
+        typer.echo(f"erro: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    t_load = time.perf_counter()
+    grid = level2.build_grid(spec, inputs)
+    t_grid = time.perf_counter()
+    manifest = level2.manifest_for(spec, inputs, grid, ts)
+    manifest, n_chunks, total_bytes = write_level(grid, manifest, ts, out)
+    t_write = time.perf_counter()
     if preview is not None:
-        typer.echo(f"  preview: {preview} (espaço da grade: o Brasil aparece girado 45°)")
+        write_preview(grid, preview)
+    notes = list(inputs.notes)
+    if auto:
+        notes.append(f"célula ajustada automaticamente para {spec.cell_meters:g} m (estado cabe em {size} células)")
+    cov = inputs.coverage
+    if cov is not None:
+        notes.append(f"MapBiomas coleção {cov.info.collection} ({cov.info.year}){' do cache' if cov.from_cache else ''}; vias: {inputs.roads_source}")
+    _report_build(out, spec, manifest, grid, ts, n_chunks, total_bytes, (t_load - t0, t_grid - t_load, t_write - t_grid), preview, notes)
+
+
+@app.command("build-level3")
+def build_level3(
+    municipio: Annotated[int, typer.Option("--municipio", help="Código IBGE do município (7 dígitos), ex.: 4314902 = Porto Alegre.")],
+    out: OutOpt = None,
+    root: RootOpt = DEFAULT_ROOT,
+    tileset: TilesetOpt = None,
+    cell_meters: Annotated[float, typer.Option(help="Tamanho da célula em metros (30 = resolução do MapBiomas).")] = 30.0,
+    size: Annotated[int | None, typer.Option(help="Lado da grade (múltiplo de 64). Sem ele, o menor que cabe o município, até 2048.")] = None,
+    centre_lon: Annotated[float | None, typer.Option("--centre-lon", help="Longitude do centro histórico (densidade de prédios).")] = None,
+    centre_lat: Annotated[float | None, typer.Option("--centre-lat", help="Latitude do centro histórico.")] = None,
+    cache_dir: CacheDirOpt = Path("data/raw"),
+    preview: Annotated[Path | None, typer.Option("--preview", help="Escreve um PNG (1 px por célula) das coberturas.")] = None,
+    no_osm: Annotated[bool, typer.Option("--no-osm", help="Não consulta o Overpass; rodovias do Natural Earth.")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Constrói o nível 3 de um município (MapBiomas 30 m + malha municipal do IBGE + OSM).
+
+    Sai em <root>/3/municipio_NNNNNNN/. Células fora do município ganham cobertura mas entidade 0.
+    """
+    from . import level3
+    from .level import entity_id
+    from .level1 import write_level, write_preview
+
+    _setup_logging(verbose)
+    ts = _load_tileset(tileset)
+    try:
+        entity_id("municipio", municipio)
+    except ValueError as e:
+        typer.echo(f"erro: {e}", err=True)
+        raise typer.Exit(code=2) from e
+    if (centre_lon is None) != (centre_lat is None):
+        typer.echo("erro: --centre-lon e --centre-lat vão juntos", err=True)
+        raise typer.Exit(code=2)
+    out = out or level3.output_dir(root, municipio)
+    t0 = time.perf_counter()
+    try:
+        geom, name, muns = level3.load_municipio(municipio, cache_dir)
+        spec, capped = level3.make_spec(geom, cell_meters=cell_meters, size=size)
+        centre = (centre_lon, centre_lat) if centre_lon is not None else None
+        inputs = level3.load_inputs(spec, municipio, name, muns, cache_dir, use_osm=not no_osm, centre=centre)
+    except (FileNotFoundError, ValueError) as e:
+        typer.echo(f"erro: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    t_load = time.perf_counter()
+    grid = level3.build_grid(spec, inputs)
+    t_grid = time.perf_counter()
+    manifest = level3.manifest_for(spec, inputs, grid, ts)
+    manifest, n_chunks, total_bytes = write_level(grid, manifest, ts, out)
+    t_write = time.perf_counter()
+    if preview is not None:
+        write_preview(grid, preview)
+    notes = list(inputs.notes)
+    if capped:
+        notes.append(f"município não cabe em {spec.size} células a {cell_meters:g} m; célula subiu para {spec.cell_meters:g} m")
+    cov = inputs.coverage
+    if cov is not None:
+        notes.append(f"MapBiomas coleção {cov.info.collection} ({cov.info.year}){' do cache' if cov.from_cache else ''}; vias: {inputs.roads_source}; vias menores: {inputs.minor_roads}")
+    _report_build(out, spec, manifest, grid, ts, n_chunks, total_bytes, (t_load - t0, t_grid - t_load, t_write - t_grid), preview, notes)
 
 
 def _layer_stats(arr: np.ndarray, ts: Tileset) -> str:
@@ -311,12 +446,40 @@ def inspect_level(level_dir: Path, ts: Tileset) -> None:
             typer.echo(f"  grade completa: {len(expected)} chunks esperados, {len(seen)} presentes")
 
 
+def inspect_root(root: Path, ts: Tileset) -> None:
+    """One summary line per level found under ``<root>/<1|2|3>/*/``."""
+    from .level import find_levels
+
+    dirs = find_levels(root)
+    if not dirs:
+        typer.echo(f"{root}: nem level.toml nem níveis em 1/, 2/, 3/", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"{root}: {len(dirs)} níveis")
+    typer.echo(f"  {'nível':<5} {'entidade':<20} {'nome':<24} {'grade':>11} {'célula':>8} {'chunks':>7} {'KiB':>8} {'entid.':>6} {'objetos':>8}  diretório")
+    for d in dirs:
+        m = read_level_toml(d / "level.toml")
+        files = list((d / "chunks").glob("*.bmc"))
+        total = sum(p.stat().st_size for p in files)
+        n_obj = 0
+        for p in files:
+            h = read_header(p)
+            if h.has_objects:
+                n_obj += len(read_chunk(p).objects)
+        missing = len(m.chunk_coords()) - len(files)
+        typer.echo(
+            f"  {m.level:<5} {m.entity:<20} {m.name[:24]:<24} {f'{m.width}x{m.height}':>11} {m.cell_meters:>7g}m "
+            f"{len(files):>7} {total / 1024:>8.1f} {len(m.entities):>6} {n_obj:>8}  {d}"
+            + (f"  ({missing} chunks ausentes)" if missing else "")
+        )
+
+
 @app.command("inspect")
 def inspect(
-    path: Annotated[Path, typer.Argument(help="Um arquivo .bmc ou o diretório de um nível.")],
+    path: Annotated[Path, typer.Argument(help="Um arquivo .bmc, o diretório de um nível ou a raiz dos níveis (--root).")],
     tileset: TilesetOpt = None,
 ) -> None:
-    """Mostra cabeçalho e estatísticas de um chunk, ou um resumo de todos os chunks de um nível.
+    """Mostra cabeçalho e estatísticas de um chunk, um resumo dos chunks de um nível, ou a lista
+    dos níveis de uma raiz (<root>/<nivel>/<entidade>/).
 
     Com --tileset, os ids são nomeados pelo tiles.toml indicado (variantes de autotiling incluídas).
     """
@@ -325,7 +488,10 @@ def inspect(
         raise typer.Exit(code=2)
     ts = _load_tileset(tileset)
     if path.is_dir():
-        inspect_level(path, ts)
+        if (path / "level.toml").exists() or (path / "chunks").is_dir() or any(path.glob("*.bmc")):
+            inspect_level(path, ts)
+        else:
+            inspect_root(path, ts)
     else:
         inspect_file(path, ts)
 

@@ -32,7 +32,7 @@ from rasterio.transform import Affine
 
 from .autotile import apply_autotile
 from .chunk import OBJECT_FLAG_FLIP_H, Chunk, ChunkObject, chunk_filename, write_chunk
-from .level import LevelManifest, write_level_toml
+from .level import LevelManifest, parse_period_date, write_level_toml
 from .tileset import Tileset
 
 log = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ ROTATION_DEG = 45.0
 
 # Terrain cover codes used inside the builder (uint8), 1-based because `apply_autotile` reads
 # code 0 as "empty cell" and every cell of level 1 has a cover (ocean included).
-OCEANO, CAMPO, FLORESTA, SAVANA, CAATINGA, PANTANAL, AGUA, AREIA, MONTANHA = range(1, 10)
+OCEANO, CAMPO, FLORESTA, SAVANA, CAATINGA, PANTANAL, AGUA, AREIA, MONTANHA, URBANO, AGRICULTURA, PASTAGEM = range(1, 13)
 TERRAIN_CODES: dict[int, str] = {
     OCEANO: "oceano",
     CAMPO: "campo",
@@ -54,13 +54,18 @@ TERRAIN_CODES: dict[int, str] = {
     AGUA: "agua",
     AREIA: "areia",
     MONTANHA: "montanha",
+    URBANO: "urbano",
+    AGRICULTURA: "agricultura",
+    PASTAGEM: "pastagem",
 }
 
 # Overlay codes, in *increasing* priority: when two overlays hit one cell the higher wins.
-RIO, RODOVIA, LIMITE_ESTADO, LIMITE_PAIS = 1, 2, 3, 4
+RIO, FERROVIA, RODOVIA, LIMITE_MUNICIPIO, LIMITE_ESTADO, LIMITE_PAIS = range(1, 7)
 OVERLAY_CODES: dict[int, str] = {
     RIO: "rio",
+    FERROVIA: "ferrovia",
     RODOVIA: "rodovia",
+    LIMITE_MUNICIPIO: "limite_municipio",
     LIMITE_ESTADO: "limite_estado",
     LIMITE_PAIS: "limite_pais",
 }
@@ -91,6 +96,17 @@ PREVIEW_COLOURS: dict[str, tuple[int, int, int]] = {
     "pantanal": (90, 160, 140),
     "areia": (240, 225, 170),
     "montanha": (130, 120, 115),
+    "urbano": (200, 70, 80),
+    "agricultura": (240, 160, 60),
+    "pastagem": (215, 225, 140),
+}
+OVERLAY_PREVIEW_COLOURS: dict[str, tuple[int, int, int]] = {
+    "rio": (120, 190, 255),
+    "ferrovia": (110, 60, 30),
+    "rodovia": (60, 60, 60),
+    "limite_municipio": (250, 250, 250),
+    "limite_estado": (255, 230, 0),
+    "limite_pais": (255, 80, 80),
 }
 
 
@@ -122,6 +138,15 @@ class GridSpec:
     center_lon: float = -53.0
     center_lat: float = -14.0
     crs: str = GRID_CRS
+
+    @classmethod
+    def from_projected_center(cls, ce: float, cn: float, *, size: int, cell_meters: float, crs: str = GRID_CRS) -> "GridSpec":
+        """Grid centred on projected ``(E, N)`` (stored as lon/lat; the round trip is sub-millimetre)."""
+        from pyproj import Transformer
+
+        t = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+        lon, lat = t.transform(ce, cn)
+        return cls(size=size, cell_meters=float(cell_meters), center_lon=float(lon), center_lat=float(lat), crs=crs)
 
     @property
     def center_projected(self) -> tuple[float, float]:
@@ -184,12 +209,23 @@ class GridSpec:
             min(90.0, max(lats) + margin_deg),
         )
 
-    def manifest(self, tileset: Tileset, entities: list[tuple[int, str, str]]) -> LevelManifest:
+    def manifest(
+        self,
+        tileset: Tileset,
+        entities: list[tuple[int, str, str]],
+        *,
+        level: int = 1,
+        entity: str = "pais:BR",
+        name: str = "Brasil e vizinhos",
+        period: str | None = None,
+    ) -> LevelManifest:
         oe, on = self.origin
         return LevelManifest(
-            level=1,
-            entity="pais:BR",
-            name="Brasil e vizinhos",
+            level=level,
+            entity=entity,
+            name=name,
+            period_start=period,
+            period_end=period,
             width=self.size,
             height=self.size,
             cell_meters=float(self.cell_meters),
@@ -520,16 +556,38 @@ def internal_borders(index: np.ndarray) -> np.ndarray:
     return out
 
 
-def tree_mask(forest: np.ndarray, permille: int = TREE_PERMILLE) -> tuple[np.ndarray, np.ndarray]:
-    """Deterministic sparse selection of forest cells: ``(keep mask, flip mask)``."""
-    h, w = forest.shape
+def hash_grid(shape: tuple[int, int], salt: int = 0) -> np.ndarray:
+    """Deterministic ``uint32`` hash of every cell coordinate (so object placement is reproducible)."""
+    h, w = shape
     yy, xx = np.mgrid[0:h, 0:w].astype(np.uint32)
-    hsh = (xx * np.uint32(73856093)) ^ (yy * np.uint32(19349663))
+    hsh = (xx * np.uint32(73856093)) ^ (yy * np.uint32(19349663)) ^ np.uint32(salt * 2654435761 & 0xFFFFFFFF)
     hsh = (hsh ^ (hsh >> np.uint32(13))) * np.uint32(0x5BD1E995)
     hsh ^= hsh >> np.uint32(15)
-    keep = forest & ((hsh % np.uint32(1000)) < permille)
+    return hsh
+
+
+def sparse_mask(where: np.ndarray, permille: int | np.ndarray, salt: int = 0) -> tuple[np.ndarray, np.ndarray]:
+    """Keep about ``permille``/1000 of the ``where`` cells (per-cell array allowed): ``(keep, flip)``."""
+    hsh = hash_grid(where.shape, salt)
+    keep = where & ((hsh % np.uint32(1000)) < np.asarray(permille, dtype=np.uint32))
     flip = ((hsh >> np.uint32(20)) & np.uint32(1)) == 1
     return keep, flip
+
+
+def tree_mask(forest: np.ndarray, permille: int = TREE_PERMILLE) -> tuple[np.ndarray, np.ndarray]:
+    """Deterministic sparse selection of forest cells: ``(keep mask, flip mask)``."""
+    return sparse_mask(forest, permille)
+
+
+def objects_from_mask(keep: np.ndarray, flip: np.ndarray, name: str) -> list[tuple[int, int, str, int]]:
+    ys, xs = np.nonzero(keep)
+    return [(int(x), int(y), name, OBJECT_FLAG_FLIP_H if f else 0) for x, y, f in zip(xs, ys, flip[ys, xs])]
+
+
+def mask_outline(mask: np.ndarray) -> np.ndarray:
+    """Cells of ``mask`` with at least one 4-neighbour outside it (grid border does not count)."""
+    outside = ~mask
+    return mask & _neighbour_any(outside)
 
 
 def index_entities(raw: np.ndarray, labels: dict[int, tuple[str, str]]) -> tuple[np.ndarray, list[tuple[int, str, str]]]:
@@ -630,10 +688,7 @@ def build_grid(spec: GridSpec, inp: Level1Inputs) -> Level1Grid:
 
     # --- objects ------------------------------------------------------------------------------
     keep, flip = tree_mask(terrain == FLORESTA)
-    ys, xs = np.nonzero(keep)
-    objects = [
-        (int(x), int(y), "arvore", OBJECT_FLAG_FLIP_H if f else 0) for x, y, f in zip(xs, ys, flip[ys, xs])
-    ]
+    objects = objects_from_mask(keep, flip, "arvore")
 
     log.info(
         "grid %dx%d built in %.1fs: %d land cells, %d entities, %d trees",
@@ -661,6 +716,9 @@ def to_chunks(grid: Level1Grid, manifest: LevelManifest, tileset: Tileset) -> li
     for x, y, name, flags in grid.objects:
         per_chunk.setdefault((x // cs, y // cs), []).append(ChunkObject(x % cs, y % cs, tileset.object_id(name), flags))
 
+    # The chunk header carries a copy of the level period (chunk.md, "Período em dois lugares").
+    p_start = parse_period_date(manifest.period_start, end=False) if manifest.period_start else None
+    p_end = parse_period_date(manifest.period_end, end=True) if manifest.period_end else None
     chunks = []
     for cx, cy in manifest.chunk_coords():
         sl = (slice(cy * cs, (cy + 1) * cs), slice(cx * cs, (cx + 1) * cs))
@@ -673,14 +731,21 @@ def to_chunks(grid: Level1Grid, manifest: LevelManifest, tileset: Tileset) -> li
                 overlay=overlay[sl].copy(),
                 entity=entity[sl].copy(),
                 objects=per_chunk.get((cx, cy), []),
+                period_start=p_start,
+                period_end=p_end,
             )
         )
     return chunks
 
 
-def write_level(grid: Level1Grid, spec: GridSpec, tileset: Tileset, out: Path) -> tuple[LevelManifest, int, int]:
-    """Write ``level.toml`` + ``chunks/``; returns ``(manifest, n_chunks, total_bytes)``."""
-    manifest = spec.manifest(tileset, grid.entities)
+def write_level(
+    grid: Level1Grid, spec: GridSpec | LevelManifest, tileset: Tileset, out: Path
+) -> tuple[LevelManifest, int, int]:
+    """Write ``level.toml`` + ``chunks/``; returns ``(manifest, n_chunks, total_bytes)``.
+
+    ``spec`` may be a :class:`GridSpec` (level 1 manifest) or a ready :class:`LevelManifest`.
+    """
+    manifest = spec if isinstance(spec, LevelManifest) else spec.manifest(tileset, grid.entities)
     chunks = to_chunks(grid, manifest, tileset)
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -705,10 +770,8 @@ def write_preview(grid: Level1Grid, path: Path) -> Path:
     for code, name in TERRAIN_CODES.items():
         lut[code] = PREVIEW_COLOURS[name]
     rgb = lut[grid.terrain]
-    rgb[grid.overlay == RIO] = (120, 190, 255)
-    rgb[grid.overlay == RODOVIA] = (60, 60, 60)
-    rgb[grid.overlay == LIMITE_ESTADO] = (255, 255, 255)
-    rgb[grid.overlay == LIMITE_PAIS] = (255, 80, 80)
+    for code, name in OVERLAY_CODES.items():
+        rgb[grid.overlay == code] = OVERLAY_PREVIEW_COLOURS[name]
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     h, w, _ = rgb.shape
@@ -729,10 +792,17 @@ __all__ = [
     "beach",
     "biome_code",
     "build_grid",
+    "_read_vector",
+    "_project",
+    "_col",
     "country_entity",
     "fill_from_neighbours",
+    "hash_grid",
     "index_entities",
     "internal_borders",
+    "mask_outline",
+    "objects_from_mask",
+    "sparse_mask",
     "load_inputs",
     "prepare_biomes",
     "prepare_countries",

@@ -21,3 +21,6 @@ dist/
 # Cache de geodados baixados (ver `bramapa-pipeline fetch`)
 /data/raw/*
 !/data/raw/.gitkeep
+
+# Níveis gerados (padrão de --root)
+/data/levels/

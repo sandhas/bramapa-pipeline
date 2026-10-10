@@ -1,0 +1,18 @@
+{
+  "version": 0.6,
+  "generator": "Overpass API 0.7.62.11 87bfad18",
+  "osm3s": {"timestamp_osm_base": "2026-10-10T16:06:36Z", "copyright": "The data included in this document is from www.openstreetmap.org. The data is made available under ODbL."},
+  "elements": [
+    {"type": "way", "id": 1, "bounds": {"minlat": -30.1, "minlon": -51.2, "maxlat": -30.0, "maxlon": -51.1},
+     "geometry": [{"lat": -30.0, "lon": -51.2}, {"lat": -30.05, "lon": -51.15}, {"lat": -30.1, "lon": -51.1}],
+     "tags": {"highway": "primary", "name": "Av. Teste"}},
+    {"type": "way", "id": 2, "geometry": [{"lat": -30.0, "lon": -51.0}, {"lat": -30.2, "lon": -51.0}],
+     "tags": {"railway": "rail"}},
+    {"type": "way", "id": 3, "geometry": [{"lat": -29.9, "lon": -51.3}, {"lat": -29.95, "lon": -51.25}],
+     "tags": {"waterway": "river", "name": "Rio Teste"}},
+    {"type": "way", "id": 4, "geometry": [{"lat": -29.9, "lon": -51.3}, {"lat": -29.95, "lon": -51.25}],
+     "tags": {"highway": "footway"}},
+    {"type": "way", "id": 5, "geometry": [{"lat": -29.9, "lon": -51.3}], "tags": {"highway": "primary"}},
+    {"type": "node", "id": 6, "lat": -30.0, "lon": -51.0, "tags": {"railway": "station"}}
+  ]
+}

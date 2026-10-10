@@ -6,6 +6,9 @@ Everything here is public and needs no login:
 * **IBGE** (open data): 2022 state (UF) polygons and the 1:250k biome vectors.
 * **NOAA ETOPO 2022** (public domain): a coarse elevation raster exported through the NCEI
   ImageServer for the South America bounding box. Optional: it only paints ``montanha``.
+* **IBGE municipal meshes** per UF (levels 2 and 3), see :func:`municipios_source`.
+* **MapBiomas** coverage COGs (CC-BY-SA 4.0), read remotely by window in ``mapbiomas.py``.
+* **OpenStreetMap** via Overpass (ODbL), roads/railways/rivers in ``osm.py``.
 
 Downloads land in ``data/raw/`` (gitignored) and are skipped when the file already exists,
 whatever its content (no checksum). Delete a file to force a re-download.
@@ -116,6 +119,49 @@ SOURCES: dict[str, Source] = {
 REQUIRED_KEYS = tuple(k for k, s in SOURCES.items() if not s.optional)
 
 
+def municipios_source(uf_code: int) -> Source:
+    """IBGE 2022 municipal mesh of one UF (``CD_MUN``, ``NM_MUN``), ~8 MB for RS. Not in
+    :data:`SOURCES` so ``fetch`` without ``--only`` never downloads all 27 states."""
+    from .level import UF_SIGLAS
+
+    sigla = UF_SIGLAS[int(uf_code)]
+    return Source(
+        key=f"ibge_municipios_{sigla}",
+        filename=f"{sigla}_Municipios_2022.zip",
+        urls=(
+            f"{IBGE_GEOFTP}/organizacao_do_territorio/malhas_territoriais/malhas_municipais/"
+            f"municipio_2022/UFs/{sigla}/{sigla}_Municipios_2022.zip",
+        ),
+        licence="IBGE, dados abertos",
+        description=f"municipalities of {sigla} (CD_MUN, NM_MUN)",
+        fields=("CD_MUN", "NM_MUN", "SIGLA_UF"),
+    )
+
+
+# MapBiomas Brazil land use / land cover, 30 m, EPSG:4326, one Cloud-Optimised GeoTIFF per year in
+# the public GCS bucket (CC-BY-SA 4.0). Read remotely through ``/vsicurl/`` (see ``mapbiomas.py``);
+# the whole files are 700-800 MB each and are never downloaded. Newest first. Only collection 9
+# ships internal overviews: the others can only be read at native 30 m without pulling the full
+# window, so decimated (level 2) reads skip them.
+MAPBIOMAS_BUCKET = "https://storage.googleapis.com/mapbiomas-public/initiatives/brasil"
+MAPBIOMAS_COVERAGES: tuple[tuple[int, int, str], ...] = (
+    (11, 2025, f"{MAPBIOMAS_BUCKET}/collection11/lulc/coverage/brazil_coverage/brazil_coverage-col11_2025.tif"),
+    (10, 2024, f"{MAPBIOMAS_BUCKET}/collection_10/lulc/coverage/brazil_coverage_2024.tif"),
+    (9, 2023, f"{MAPBIOMAS_BUCKET}/collection_9/lclu/coverage/brasil_coverage_2023.tif"),
+    (8, 2022, f"{MAPBIOMAS_BUCKET}/collection_8/lclu/coverage/brasil_coverage_2022.tif"),
+)
+"""``(collection, year, url)`` candidates, tried in order."""
+MAPBIOMAS_LICENCE = "MapBiomas, CC-BY-SA 4.0"
+
+# OpenStreetMap via the Overpass API (data ODbL; attribution "© OpenStreetMap contributors").
+OVERPASS_ENDPOINTS: tuple[str, ...] = (
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+)
+OSM_LICENCE = "OpenStreetMap contributors, ODbL 1.0"
+
+
 class SourceError(RuntimeError):
     """A required download failed on every URL."""
 
@@ -206,6 +252,11 @@ def cached_status(cache_dir: Path = DEFAULT_CACHE_DIR) -> list[tuple[Source, Pat
 
 __all__ = [
     "DEFAULT_CACHE_DIR",
+    "MAPBIOMAS_COVERAGES",
+    "MAPBIOMAS_LICENCE",
+    "OSM_LICENCE",
+    "OVERPASS_ENDPOINTS",
+    "municipios_source",
     "ETOPO_BBOX",
     "ETOPO_SIZE",
     "REQUIRED_KEYS",

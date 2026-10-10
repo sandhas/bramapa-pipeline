@@ -4,10 +4,12 @@ Pipeline offline do **Bramapa**, um atlas 2.5D isométrico em pixel art do Brasi
 parte em Python que pega geodados (relevo, uso do solo, malhas do IBGE...) e cospe os arquivos que
 o motor renderiza: chunks de tiles (`.bmc`) e o manifesto de cada nível (`level.toml`).
 
-**Estado atual: Fase 2.** O esqueleto funciona de ponta a ponta (codec do `.bmc` com as camadas
+**Estado atual: Fase 4.** O esqueleto funciona de ponta a ponta (codec do `.bmc` com as camadas
 `terrain`, `overlay`, `entity` e `objects`, escrita de `level.toml`, CLI, testes), os ids de tile
-saem do `tiles.toml` de um tileset via autotiling e o **nível 1 (Brasil e vizinhos) já é gerado de
-geodados públicos** (Natural Earth, IBGE, ETOPO) pelo comando `build-level1`. O gerador sintético
+saem do `tiles.toml` de um tileset via autotiling, o **nível 1 (Brasil e vizinhos) é gerado de
+geodados públicos** (Natural Earth, IBGE, ETOPO) por `build-level1` e os **níveis 2 (um estado) e 3
+(um município) saem do MapBiomas 30 m, das malhas municipais do IBGE e do OpenStreetMap** por
+`build-level2`/`build-level3`, todos no layout de diretórios da spec (`--root`). O gerador sintético
 (`chunk-test`) continua existindo para testar o motor sem download.
 
 ## Os quatro repositórios
@@ -66,10 +68,15 @@ sem login. Primeiro o download para o cache, depois a construção:
 
 ```sh
 uv run bramapa-pipeline fetch                                   # baixa tudo para data/raw/ (~70 MB)
-uv run bramapa-pipeline build-level1 --out ../bramapa-data/1/pais_BR --tileset ../bramapa-tileset
+uv run bramapa-pipeline build-level1 --root ../bramapa-data --tileset ../bramapa-tileset   # -> ../bramapa-data/1/pais_BR/
 uv run bramapa-pipeline build-level1 --out /tmp/l1 --tileset ../bramapa-tileset --preview /tmp/l1.png
 uv run bramapa-pipeline inspect ../bramapa-data/1/pais_BR --tileset ../bramapa-tileset
 ```
+
+Os três `build-level*` escrevem em `<root>/<nível>/<entidade>/` (`1/pais_BR`, `2/estado_43`,
+`3/municipio_4314902`; o `:` do id vira `_` no disco, como manda o `chunk.md`). `--root` vale
+`data/levels` (gitignored) por padrão e `--out DIR` sobrepõe tudo e grava direto em `DIR`.
+`inspect <root>` lista todos os níveis encontrados na raiz.
 
 Opções de `build-level1`: `--cell-meters 7000`, `--size 1024`, `--center-lon -53`,
 `--center-lat -14`, `--cache-dir data/raw`, `--preview arquivo.png` (1 px por célula, no espaço da
@@ -143,6 +150,105 @@ Regras, todas vetorizadas em numpy (`level1.py`):
   na média da célula não viram `montanha` (o Brasil inteiro fica sem montanha, o que bate com a
   realidade a esta escala).
 
+## Níveis 2 e 3
+
+```sh
+uv run bramapa-pipeline build-level2 --uf 43 --tileset ../bramapa-tileset --preview /tmp/rs.png            # -> data/levels/2/estado_43/
+uv run bramapa-pipeline build-level3 --municipio 4314902 --tileset ../bramapa-tileset --preview /tmp/poa.png  # -> data/levels/3/municipio_4314902/
+uv run bramapa-pipeline inspect data/levels --tileset ../bramapa-tileset
+```
+
+Os dois precisam do `fetch` do nível 1 antes (Natural Earth e `BR_UF_2022`); o resto é baixado sob
+demanda para o cache. A grade é a mesma do nível 1 (`EPSG:5880` girada 45°, origem no vértice norte
+da célula `(0,0)`), só mudam centro, célula e fontes.
+
+### `build-level2 --uf NN`
+
+Um estado em ~1024×1024 células. O centro é o do losango envolvente do estado no espaço girado e a
+célula, sem `--cell-meters`, é a menor que faz o estado inteiro caber em `--size` células
+(`region.fit_cell_meters`: `r·√2·1,04 / size`, arredondada a 10 m, **mínimo 700 m**). O RS cai
+exatamente no mínimo (700 m); um estado menor como Sergipe ficaria com células de 700 m em uma
+grade sobrando, e um gigante como o Amazonas vai a ~2,3 km.
+
+- **Terreno**: classes do MapBiomas agregadas pela tabela `mapbiomas.MAPBIOMAS_COVER`
+  (3/49/9/6 → `floresta`, 4 → `savana`, 5/11/32 → `pantanal`, 12/50/25/30/13 → `campo`,
+  15/21 → `pastagem`, lavouras 18–20/35/36/39–41/46–48/62 → `agricultura`, 23 → `areia`,
+  24 → `urbano`, 29 → `montanha`, 33/31 → `agua`). A leitura é decimada pelos overviews do COG
+  (~4 px de fonte por célula) e reamostrada por **moda** direto na grade girada. Nodata (fora do
+  Brasil) vira `campo` em terra e `oceano` fora dela; água do MapBiomas fora da máscara de terra
+  (a faixa costeira que o MapBiomas pinta como classe 33) vira `oceano`. Lagos do Natural Earth só
+  entram onde o MapBiomas não cobre (lado uruguaio da Lagoa Mirim). Praia de uma célula como no nível 1.
+- **Entidades**: `municipio:<CD_MUN>` (nome `NM_MUN`) para cada município da malha do IBGE da UF
+  (todos os 497 do RS; municípios menores que uma célula recebem a célula do seu ponto
+  representativo); as duas "lagoas-município" da malha (`4300001`, `4300002`) viram `estado:43`.
+  Fora da UF: `estado:NN` vizinhos pela `BR_UF_2022` e `pais:XX` pelo Natural Earth. Oceano = 0.
+- **Overlay**: `rio` (Natural Earth, `scalerank ≤ 8`), `ferrovia` e `rodovia` (OSM), `limite_municipio`
+  (entre municípios diferentes, uma célula de largura), `limite_estado`, `limite_pais`; prioridade
+  nessa ordem crescente.
+- **Objetos**: `arvore` em ~3% da `floresta`, `predio` em ~6% e `casa` em ~12% do `urbano`, por hash
+  da coordenada (determinístico).
+
+### `build-level3 --municipio NNNNNNN`
+
+Um município a 30 m (a resolução do MapBiomas). O lado da grade é o menor múltiplo de 64 que cabe o
+losango do município (`region.fit_size`), até 2048; se nem 2048 células bastarem a 30 m, a célula
+sobe e o comando avisa. Porto Alegre dá 1472×1472 (23×23 chunks). Opções: `--cell-meters 30`,
+`--size` (força o lado), `--centre-lon/--centre-lat` (centro histórico para a densidade de prédios;
+Porto Alegre tem o seu embutido em `level3.HISTORIC_CENTRES`, os outros usam o centróide das
+células urbanas), `--no-osm`.
+
+- **Terreno**: MapBiomas nativo (janela de ~2500×2200 px), mesma tabela; `oceano` só onde o
+  MapBiomas é nodata **e** está fora da terra (malha municipal da UF + países do Natural Earth).
+  O Guaíba e os lagos saem como `agua` (classe 33); os banhados do delta como `pantanal` (classe 11).
+- **Entidades**: dentro do município = índice 1 (`municipio:NNNNNNN`), fora = 0, mas as células de
+  fora continuam pintadas para o entorno existir. `limite_municipio` no contorno.
+- **Overlay (OSM)**: `highway` motorway/trunk/primary/secondary → `rodovia`, `railway=rail` →
+  `ferrovia`, `waterway=river` → `rio`. `tertiary`/`residential` entram também como `rodovia`
+  quando a bbox tem menos de 60 mil dessas vias (`out count` antes de baixar; Porto Alegre tem
+  ~32 mil, então entram); acima disso são puladas e o comando diz.
+- **Objetos**: `predio` em células `urbano` com densidade caindo com a distância ao centro
+  histórico (`region.predio_permille`: 25% até 2 km, linear até 8% a 5 km, até 2% a 10 km e além),
+  `casa` em ~20% do `urbano` restante, `arvore` em ~10% da `floresta`.
+
+### Fontes, licenças e cache
+
+| Dado | Fonte | Licença / atribuição |
+|---|---|---|
+| Cobertura e uso da terra, 30 m | MapBiomas, GeoTIFF anual no bucket público `gs://mapbiomas-public/initiatives/brasil/` — coleção 9 (2023) para leituras decimadas (`.../collection_9/lclu/coverage/brasil_coverage_2023.tif`, única com overviews internos), coleção 11 (2025, `.../collection11/lulc/coverage/brazil_coverage/brazil_coverage-col11_2025.tif`) ou 10 (2024) para leituras a 30 m. Ordem de tentativa em `sources.MAPBIOMAS_COVERAGES` | **CC-BY-SA 4.0** — citar "Projeto MapBiomas – Coleção N da Série Anual de Mapas de Cobertura e Uso da Terra do Brasil"; o que deriva dela (os chunks) herda o *share-alike* |
+| Malha municipal 2022 | IBGE, `geoftp.ibge.gov.br/.../municipio_2022/UFs/<UF>/<UF>_Municipios_2022.zip` (RS: 7,8 MB) | IBGE, dados abertos (citar a fonte) |
+| Rodovias, ferrovias, rios | OpenStreetMap via Overpass API (`overpass-api.de`, espelhos `overpass.kumi.systems` e `overpass.private.coffee`), consulta OverpassQL com `out geom` | **ODbL 1.0** — todo produto que usa estes dados precisa trazer a atribuição "© OpenStreetMap contributors" (no motor/atlas, não só aqui), e uma base derivada redistribuída fica sob ODbL |
+| Países, lagos, rios, fronteiras, rodovias de reserva | Natural Earth (já no cache do nível 1) | domínio público |
+
+O MapBiomas **nunca é baixado inteiro** (cada arquivo tem 700–800 MB): o `mapbiomas.py` abre o COG
+por `/vsicurl/` e lê só a janela da bbox do nível com *range requests*, usando os overviews quando
+decimada (RS a 700 m: ~8,8 MB de rede, 40k×35k px lidos como 7,9k×6,9k; Porto Alegre a 30 m:
+~0,9 MB). A janela vai para `data/raw/mapbiomas_<entidade>.tif` (RS 5,5 MB, POA 0,5 MB, com
+coleção/ano nas tags) e reexecuções são offline. As respostas do Overpass ficam em
+`data/raw/osm_<entidade>_*.json` (RS: 65 MB de rodovias+ferrovias, ~60 mil vias; Porto Alegre: 8,7 MB de
+vias principais+ferrovia+rios e 21 MB de tertiary/residential). O ano do MapBiomas usado vai para
+`[period]` do `level.toml` (e para o cabeçalho dos chunks).
+
+Tempos medidos (cache frio, rede comum): RS ~70 s (quase tudo esperando o Overpass, que estava
+sobrecarregado e precisou de tentativas), Porto Alegre ~55 s; com cache quente, 6 s e 8 s. A grade
+em si leva 1–2 s.
+
+### Limites
+
+- Overpass é um serviço público e cai com frequência ("server too busy", HTTP 504/500). O `osm.py`
+  roda nos três endpoints com até 3 passadas e espera crescente; se nada responder, o nível sai com
+  as rodovias do Natural Earth (`Major Highway`, `Beltway`, `Secondary Highway`), sem ferrovia nem
+  rio do OSM, e o comando avisa. Cache em disco evita bater de novo.
+- Só a coleção 9 do MapBiomas tem overviews; as coleções 10 e 11 não, então o nível 2 fica em
+  2023 e o nível 3 em 2025. Uma leitura decimada da coleção 10 funcionaria, mas puxa a janela
+  inteira a 30 m (~2 min e centenas de MB para o RS).
+- A tabela de classes é uma agregação grosseira: banhados e mangues viram `pantanal`, silvicultura
+  vira `floresta`, mosaico de usos vira `pastagem`, afloramento rochoso vira `montanha`.
+- Vias e contornos são rasterizados com `all_touched`: a 30 m uma rua de 10 m vira uma faixa de
+  1–2 células; o tileset ainda não tem curvas de overlay.
+- O nível 3 tem uma entidade só; os municípios vizinhos aparecem pintados, mas com entidade 0.
+- Sem o `fetch` do nível 1 os comandos param com erro pedindo-o (precisam da `BR_UF_2022` e do
+  Natural Earth).
+
 ## Autotiling
 
 O gerador não conhece ids de tile. Ele produz grades de **cobertura** (`"oceano"`, `"campo"`,
@@ -197,20 +303,26 @@ src/bramapa_pipeline/
   autotile.py # máscara de vizinhança vetorizada e apply_autotile(coberturas -> ids)
   tiles.py    # ids provisórios acima (só alimentam o tileset embutido)
   synth.py    # gerador sintético (value noise) em coberturas e chunkify() via tileset
-  sources.py  # fontes públicas do nível 1 e cache de download em data/raw/
+  sources.py  # fontes públicas e cache de download em data/raw/ (NE, IBGE, MapBiomas, Overpass)
   level1.py   # nível 1 real: grade rotacionada em EPSG:5880, rasterização, regras, chunks, preview
-  cli.py      # typer: fetch, build-level1, chunk-test, inspect, autotile-demo, version
-tests/        # pytest: round-trip, cabeçalho, máscaras, tileset, CLI, builder em GeoDataFrames sintéticos
+  mapbiomas.py # tabela de classes MapBiomas -> cobertura, leitura remota por janela (/vsicurl/) e warp
+  osm.py      # Overpass: consulta, cache JSON, parser de ways -> linhas, classificação de overlay
+  region.py   # ajuste de grade (centro/célula/lado), objetos por distância, malhas do IBGE por UF
+  level2.py   # nível 2 (estado): entidades municipais, MapBiomas decimado, overlays
+  level3.py   # nível 3 (município): MapBiomas 30 m, OSM, prédios por distância ao centro
+  cli.py      # typer: fetch, build-level1/2/3 (--root), chunk-test, inspect, autotile-demo, version
+tests/        # pytest: round-trip, cabeçalho, máscaras, tileset, CLI, builders em dados sintéticos, Fase 4 (tabela, ajuste, layout, densidade, Overpass)
 ```
 
 Identificadores e comentários no código em inglês; documentação em PT-BR.
 
 ## Próximos passos
 
-- **Cobertura por uso do solo (MapBiomas).** Trocar bioma por classificação real dentro do Brasil
-  (`agricultura`, `pastagem`, `urbano`, água de reservatório) e dar cobertura aos vizinhos.
-- **Níveis 2 e 3.** Mesma máquina (`level1.py` generaliza bem: muda a entidade, o centro, a célula e
-  as fontes), com malhas municipais do IBGE para `limite_municipio` e entidades `municipio:NNNNNNN`.
+- **MapBiomas no nível 1.** O nível 1 ainda pinta por bioma; a mesma leitura decimada do
+  `mapbiomas.py` (a ~7 km, overview 256) daria `agricultura`, `pastagem` e `urbano` ao Brasil inteiro.
+- **Todos os estados e municípios.** `build-level2`/`build-level3` fazem um por vez; um comando de
+  lote (27 UFs, 5570 municípios) precisa de paralelismo e de respeito ao Overpass (ou de um extrato
+  Geofabrik em vez da API).
 - **Autotiling de overlay por máscara.** Rodovias, rios e ferrovias já passam pelo mesmo caminho
   de `[[autotile]]`, mas o placeholder ainda desenha uma faixa reta; curvas e ramificações entram
   quando o tileset tiver as variantes.

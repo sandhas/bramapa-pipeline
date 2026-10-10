@@ -65,6 +65,80 @@ class LevelManifest:
         return [(cx, cy) for cy in range(self.chunks_y) for cx in range(self.chunks_x)]
 
 
+# ----------------------------------------------------------------------------- entity ids & layout
+
+ENTITY_TYPES = ("pais", "estado", "municipio")
+
+# IBGE UF code -> sigla (the geoftp municipal meshes are organised by sigla).
+UF_SIGLAS: dict[int, str] = {
+    11: "RO", 12: "AC", 13: "AM", 14: "RR", 15: "PA", 16: "AP", 17: "TO",
+    21: "MA", 22: "PI", 23: "CE", 24: "RN", 25: "PB", 26: "PE", 27: "AL", 28: "SE", 29: "BA",
+    31: "MG", 32: "ES", 33: "RJ", 35: "SP",
+    41: "PR", 42: "SC", 43: "RS",
+    50: "MS", 51: "MT", 52: "GO", 53: "DF",
+}  # fmt: skip
+
+
+def entity_id(kind: str, code: int | str) -> str:
+    """Canonical ``<tipo>:<codigo>`` (``README.md``): ``pais:BR``, ``estado:43``, ``municipio:4314902``."""
+    if kind == "pais":
+        return f"pais:{str(code).upper()}"
+    if kind == "estado":
+        code = int(code)
+        if code not in UF_SIGLAS:
+            raise ValueError(f"unknown IBGE UF code {code}")
+        return f"estado:{code:02d}"
+    if kind == "municipio":
+        code = int(code)
+        if not (1_100_000 <= code <= 5_399_999) or code // 100_000 not in UF_SIGLAS:
+            raise ValueError(f"invalid IBGE municipality code {code} (7 digits, UF prefix)")
+        return f"municipio:{code:07d}"
+    raise ValueError(f"unknown entity type {kind!r}; expected one of {ENTITY_TYPES}")
+
+
+def parse_entity_id(eid: str) -> tuple[str, str]:
+    kind, sep, code = eid.partition(":")
+    if not sep or not kind or not code:
+        raise ValueError(f"entity id must look like '<tipo>:<codigo>', got {eid!r}")
+    return kind, code
+
+
+def municipio_uf(code: int | str) -> int:
+    """UF code (first two digits) of a 7-digit IBGE municipality code."""
+    return int(code) // 100_000
+
+
+def is_pseudo_municipio(code: int | str) -> bool:
+    """IBGE meshes carry water bodies as pseudo-municipalities (``4300001`` Lagoa Mirim, ``4300002``
+    Lagoa dos Patos): the code is ``UU SSSS D`` (UF, sequence, check digit) and the sequence is
+    ``0000``. Real municipalities start at ``0001``."""
+    return (int(code) // 10) % 10000 == 0
+
+
+def entity_dirname(eid: str) -> str:
+    """On-disk name of an entity directory: ``:`` becomes ``_`` (``chunk.md``), ``municipio_4314902``."""
+    parse_entity_id(eid)
+    return eid.replace(":", "_")
+
+
+def level_dir(root: str | Path, level: int, eid: str) -> Path:
+    """``<root>/<nivel>/<entity-id>/`` with the on-disk spelling, e.g. ``root/3/municipio_4314902``."""
+    if level not in (1, 2, 3):
+        raise ValueError(f"level must be 1, 2 or 3, got {level}")
+    return Path(root) / str(level) / entity_dirname(eid)
+
+
+def find_levels(root: str | Path) -> list[Path]:
+    """Every ``<root>/<1|2|3>/*/level.toml`` directory under a levels root, sorted."""
+    root = Path(root)
+    out = []
+    for lv in ("1", "2", "3"):
+        d = root / lv
+        if d.is_dir():
+            out += sorted(p for p in d.iterdir() if (p / "level.toml").is_file())
+    return out
+
+
 def parse_period_date(s: str, *, end: bool) -> date:
     """Expand an ISO ``YYYY``/``YYYY-MM``/``YYYY-MM-DD`` to the first (or last) day it covers."""
     parts = s.split("-")
