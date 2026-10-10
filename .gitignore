@@ -17,3 +17,7 @@ dist/
 # Saídas de teste do pipeline
 /out/
 /level-test/
+
+# Cache de geodados baixados (ver `bramapa-pipeline fetch`)
+/data/raw/*
+!/data/raw/.gitkeep

@@ -156,3 +156,69 @@ def test_validation():
         Chunk(cx=0, cy=0, terrain=np.zeros((32, 64), dtype=np.uint16))
     with pytest.raises(ChunkFormatError):
         Chunk(cx=0, cy=0, period_start=date(2020, 1, 1))
+
+
+# ----------------------------------------------------------------------------- entity layer
+
+
+def test_header_and_payload_with_entity_layer():
+    entity = np.arange(64 * 64, dtype=np.uint16).reshape(64, 64) % 7
+    ch = make_chunk(entity=entity)
+    data = encode(ch)
+    assert struct.unpack_from("<H", data, 6)[0] == 0x0002  # flag bit 1 only
+    assert data[10] == 3  # terrain, overlay, entity
+    raw = zstandard.ZstdDecompressor().decompress(data[HEADER_SIZE:])
+    n = 64 * 64
+    assert len(raw) == 3 * n * 2
+    back_entity = np.frombuffer(raw[2 * n * 2 : 3 * n * 2], dtype="<u2").reshape(64, 64)
+    assert np.array_equal(back_entity, entity)
+
+
+def test_entity_layer_precedes_objects():
+    entity = np.full((64, 64), 5, dtype=np.uint16)
+    ch = make_chunk(entity=entity, objects=[(1, 1, 40, 0)])
+    data = encode(ch)
+    assert struct.unpack_from("<H", data, 6)[0] == 0x0003
+    assert data[10] == 4
+    raw = zstandard.ZstdDecompressor().decompress(data[HEADER_SIZE:])
+    n = 64 * 64
+    assert len(raw) == 3 * n * 2 + 4 + 8
+    assert struct.unpack_from("<H", raw, 2 * n * 2)[0] == 5  # entity layer right after overlay
+    assert struct.unpack_from("<I", raw, 3 * n * 2)[0] == 1  # then the objects count
+
+
+def test_roundtrip_entity():
+    entity = np.zeros((64, 64), dtype=np.uint16)
+    entity[10:20, 30:40] = 3
+    ch = make_chunk(entity=entity, objects=[(2, 3, 40, 1)])
+    back = decode(encode(ch))
+    assert back.entity is not None
+    assert np.array_equal(back.entity, entity)
+    assert back.objects == [ChunkObject(2, 3, 40, 1)]
+    assert back.layer_count == 4
+    assert encode(back) == encode(ch)
+
+
+def test_canonical_encoding_without_entity():
+    # No entity and no objects: flags 0, layer_count 2, byte-identical to a fresh encode.
+    ch = make_chunk()
+    assert ch.entity is None
+    data = encode(ch)
+    assert struct.unpack_from("<H", data, 6)[0] == 0
+    assert data[10] == 2
+    back = decode(data)
+    assert back.entity is None
+    assert encode(back) == data
+    # An all-zero entity array is *present* (not canonical-equivalent to None).
+    data2 = encode(make_chunk(entity=np.zeros((64, 64), dtype=np.uint16)))
+    assert struct.unpack_from("<H", data2, 6)[0] == 0x0002
+    assert decode(data2).entity is not None
+
+
+def test_entity_layer_count_mismatch_and_shape():
+    data = bytearray(encode(make_chunk(entity=np.zeros((64, 64), dtype=np.uint16))))
+    data[10] = 2  # flags say entity present but layer_count says 2
+    with pytest.raises(ChunkFormatError):
+        decode(bytes(data))
+    with pytest.raises(ChunkFormatError):
+        Chunk(cx=0, cy=0, entity=np.zeros((32, 64), dtype=np.uint16))

@@ -62,3 +62,40 @@ def test_validation():
         LevelManifest(level=1, entity="BR", name="x", width=1, height=1, cell_meters=1.0)
     with pytest.raises(ValueError):
         LevelManifest(level=1, entity="pais:BR", name="x", width=1, height=1, cell_meters=1.0, period_start="2020")
+
+
+def test_entities_round_trip(tmp_path):
+    m = LevelManifest(
+        level=1,
+        entity="pais:BR",
+        name="Brasil e vizinhos",
+        width=1024,
+        height=1024,
+        cell_meters=7000.0,
+        entities=[(1, "estado:43", "Rio Grande do Sul"), (2, "pais:UY", "Uruguai")],
+    )
+    p = write_level_toml(tmp_path / "level.toml", m)
+    doc = tomllib.loads(p.read_text(encoding="utf-8"))
+    assert doc["entities"] == [
+        {"index": 1, "id": "estado:43", "name": "Rio Grande do Sul"},
+        {"index": 2, "id": "pais:UY", "name": "Uruguai"},
+    ]
+    assert read_level_toml(p) == m
+    assert read_level_toml(p).entities == [(1, "estado:43", "Rio Grande do Sul"), (2, "pais:UY", "Uruguai")]
+
+
+def test_no_entities_omits_table(tmp_path):
+    m = LevelManifest(level=1, entity="pais:BR", name="x", width=1, height=1, cell_meters=1.0)
+    p = write_level_toml(tmp_path / "level.toml", m)
+    assert "entities" not in tomllib.loads(p.read_text(encoding="utf-8"))
+    assert read_level_toml(p).entities == []
+
+
+def test_entities_validation():
+    kw = dict(level=1, entity="pais:BR", name="x", width=1, height=1, cell_meters=1.0)
+    with pytest.raises(ValueError):
+        LevelManifest(**kw, entities=[(0, "pais:BR", "x")])  # 0 is reserved
+    with pytest.raises(ValueError):
+        LevelManifest(**kw, entities=[(1, "pais:BR", "x"), (1, "pais:UY", "y")])
+    with pytest.raises(ValueError):
+        LevelManifest(**kw, entities=[(1, "BR", "x")])

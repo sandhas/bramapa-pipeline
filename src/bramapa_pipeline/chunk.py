@@ -6,8 +6,13 @@ Layout::
     zstd frame (standard, no dictionary) containing:
         terrain  : chunk_size² × u16, row-major (y outer, x inner)
         overlay  : chunk_size² × u16, same order
+        entity   : only if header.flags & 2 — chunk_size² × u16, index into ``[[entities]]`` of
+                   level.toml (0 = none)
         objects  : only if header.flags & 1 — u32 count, then count × 8-byte records
                    (u8 cell_x, u8 cell_y, u16 tile_id, u16 flags, u16 reserved)
+
+Layer order in the payload is fixed: terrain, overlay, entity (if any), objects (if any).
+``layer_count = 2 + has_entity + has_objects``.
 """
 
 from __future__ import annotations
@@ -33,6 +38,9 @@ assert HEADER_STRUCT.size == HEADER_SIZE
 
 FLAG_HAS_OBJECTS = 0x0001
 """Header flag bit 0: payload has an ``objects`` layer."""
+
+FLAG_HAS_ENTITY = 0x0002
+"""Header flag bit 1: payload has an ``entity`` layer."""
 
 OBJECT_FLAG_FLIP_H = 0x0001
 """Object flag bit 0: sprite mirrored horizontally."""
@@ -94,6 +102,12 @@ class Chunk:
     objects: list[ChunkObject] = field(default_factory=list)
     period_start: date | None = None
     period_end: date | None = None
+    entity: np.ndarray | None = None
+    """Optional ``(size, size)`` ``uint16`` index into ``[[entities]]``; ``None`` = layer absent.
+
+    An all-zero array is still *written* (the layer is present, every cell "no entity"); pass
+    ``None`` to omit the layer and get the canonical 2-layer encoding.
+    """
 
     def __post_init__(self) -> None:
         if self.terrain is None:
@@ -102,6 +116,8 @@ class Chunk:
             self.overlay = np.zeros((self.size, self.size), dtype=np.uint16)
         self.terrain = np.ascontiguousarray(self.terrain, dtype=np.uint16)
         self.overlay = np.ascontiguousarray(self.overlay, dtype=np.uint16)
+        if self.entity is not None:
+            self.entity = np.ascontiguousarray(self.entity, dtype=np.uint16)
         self.objects = [ChunkObject(*o) for o in self.objects]
         self.validate()
 
@@ -116,6 +132,8 @@ class Chunk:
             raise ChunkFormatError(f"terrain shape {self.terrain.shape} != {shape}")
         if self.overlay.shape != shape:
             raise ChunkFormatError(f"overlay shape {self.overlay.shape} != {shape}")
+        if self.entity is not None and self.entity.shape != shape:
+            raise ChunkFormatError(f"entity shape {self.entity.shape} != {shape}")
         for o in self.objects:
             if not (0 <= o.cell_x < self.size and 0 <= o.cell_y < self.size):
                 raise ChunkFormatError(f"object cell {o.cell_x},{o.cell_y} outside chunk")
@@ -129,8 +147,16 @@ class Chunk:
         return len(self.objects) > 0
 
     @property
+    def has_entity(self) -> bool:
+        return self.entity is not None
+
+    @property
+    def flags(self) -> int:
+        return (FLAG_HAS_OBJECTS if self.has_objects else 0) | (FLAG_HAS_ENTITY if self.has_entity else 0)
+
+    @property
     def layer_count(self) -> int:
-        return 3 if self.has_objects else 2
+        return 2 + int(self.has_entity) + int(self.has_objects)
 
 
 def encode(chunk: Chunk, *, zstd_level: int = 3) -> bytes:
@@ -140,9 +166,10 @@ def encode(chunk: Chunk, *, zstd_level: int = 3) -> bytes:
         chunk.terrain.astype("<u2", copy=False).tobytes(order="C"),
         chunk.overlay.astype("<u2", copy=False).tobytes(order="C"),
     ]
-    flags = 0
+    flags = chunk.flags
+    if chunk.has_entity:
+        parts.append(chunk.entity.astype("<u2", copy=False).tobytes(order="C"))  # type: ignore[union-attr]
     if chunk.has_objects:
-        flags |= FLAG_HAS_OBJECTS
         parts.append(struct.pack("<I", len(chunk.objects)))
         parts.extend(OBJECT_STRUCT.pack(o.cell_x, o.cell_y, o.tile_id, o.flags, 0) for o in chunk.objects)
     raw = b"".join(parts)
@@ -182,6 +209,14 @@ class ChunkHeader:
     def has_objects(self) -> bool:
         return bool(self.flags & FLAG_HAS_OBJECTS)
 
+    @property
+    def has_entity(self) -> bool:
+        return bool(self.flags & FLAG_HAS_ENTITY)
+
+
+def expected_layer_count(flags: int) -> int:
+    return 2 + int(bool(flags & FLAG_HAS_ENTITY)) + int(bool(flags & FLAG_HAS_OBJECTS))
+
 
 def decode_header(data: bytes) -> ChunkHeader:
     if len(data) < HEADER_SIZE:
@@ -191,8 +226,7 @@ def decode_header(data: bytes) -> ChunkHeader:
         raise ChunkFormatError(f"bad magic {magic!r}, expected {MAGIC!r}")
     if spec != SPEC_VERSION:
         raise ChunkFormatError(f"unsupported spec_version {spec}, this codec speaks {SPEC_VERSION}")
-    has_objects = bool(flags & FLAG_HAS_OBJECTS)
-    if layers != (3 if has_objects else 2):
+    if layers != expected_layer_count(flags):
         raise ChunkFormatError(f"layer_count {layers} inconsistent with flags {flags:#06x}")
     if size == 0:
         raise ChunkFormatError("chunk_size is 0")
@@ -216,6 +250,12 @@ def decode(data: bytes) -> Chunk:
     offset += layer_bytes
     overlay = np.frombuffer(raw, dtype="<u2", count=n, offset=offset).reshape(h.chunk_size, h.chunk_size)
     offset += layer_bytes
+    entity: np.ndarray | None = None
+    if h.has_entity:
+        if len(raw) < offset + layer_bytes:
+            raise ChunkFormatError("payload truncated in entity layer")
+        entity = np.frombuffer(raw, dtype="<u2", count=n, offset=offset).reshape(h.chunk_size, h.chunk_size).copy()
+        offset += layer_bytes
     objects: list[ChunkObject] = []
     if h.has_objects:
         if len(raw) < offset + 4:
@@ -242,6 +282,7 @@ def decode(data: bytes) -> Chunk:
         objects=objects,
         period_start=days_to_date(h.period_start),
         period_end=days_to_date(h.period_end),
+        entity=entity,
     )
 
 

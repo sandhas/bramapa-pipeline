@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
@@ -29,8 +29,20 @@ class LevelManifest:
     tileset_version: str = "0.0.1"
     period_start: str | None = None  # ISO 8601: "YYYY", "YYYY-MM" or "YYYY-MM-DD"
     period_end: str | None = None
+    entities: list[tuple[int, str, str]] = field(default_factory=list)
+    """``(index, id, name)`` rows written as ``[[entities]]``; index 0 is reserved (none)."""
 
     def __post_init__(self) -> None:
+        self.entities = [(int(i), str(eid), str(name)) for i, eid, name in self.entities]
+        seen: set[int] = set()
+        for idx, eid, _name in self.entities:
+            if not (1 <= idx <= 0xFFFF):
+                raise ValueError(f"entity index {idx} out of range 1..65535 (0 is reserved)")
+            if idx in seen:
+                raise ValueError(f"duplicate entity index {idx}")
+            seen.add(idx)
+            if ":" not in eid:
+                raise ValueError(f"entity id must look like '<tipo>:<codigo>', got {eid!r}")
         if self.level not in (1, 2, 3):
             raise ValueError(f"level must be 1, 2 or 3, got {self.level}")
         if ":" not in self.entity:
@@ -113,6 +125,14 @@ def render_level_toml(m: LevelManifest) -> str:
             f"start = {_toml_str(m.period_start)}",
             f"end = {_toml_str(m.period_end)}",
         ]
+    for idx, eid, name in m.entities:
+        lines += [
+            "",
+            "[[entities]]",
+            f"index = {idx}",
+            f"id = {_toml_str(eid)}",
+            f"name = {_toml_str(name)}",
+        ]
     return "\n".join(lines) + "\n"
 
 
@@ -147,4 +167,5 @@ def read_level_toml(path: str | Path) -> LevelManifest:
         tileset_version=ts["version"],
         period_start=period.get("start"),
         period_end=period.get("end"),
+        entities=[(e["index"], e["id"], e["name"]) for e in doc.get("entities", [])],
     )
