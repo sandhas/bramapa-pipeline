@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Ambiente virtual
+.venv/
+
+# Builds
+build/
+dist/
+*.whl
+
+# Saídas de teste do pipeline
+/out/
+/level-test/

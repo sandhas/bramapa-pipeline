@@ -1,0 +1,31 @@
+[project]
+name = "bramapa-pipeline"
+version = "0.1.0"
+description = "Pipeline offline do Bramapa: transforma geodados em chunks de tiles (.bmc) para o atlas isométrico do Brasil"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
+authors = [
+    { name = "Bramapa contributors" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.5.3",
+    "typer>=0.27.3",
+    "zstandard>=0.25.0",
+]
+
+[project.scripts]
+bramapa-pipeline = "bramapa_pipeline.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.13.0,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
