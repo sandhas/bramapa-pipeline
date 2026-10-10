@@ -2,6 +2,9 @@
 
 Not a geodata pipeline: this just produces plausible-looking chunks so the engine and the
 tileset have something to render before Fase 2. Everything is deterministic for a seed.
+
+The generator never touches tile ids: it emits *cover* grids (``"oceano"``, ``"campo"``...) and
+objects by tile *name*; :func:`chunkify` resolves them through a :class:`~.tileset.Tileset`.
 """
 
 from __future__ import annotations
@@ -10,20 +13,24 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import tiles
+from .autotile import EMPTY_COVER, apply_autotile, empty_cover_grid
 from .chunk import Chunk, ChunkObject, OBJECT_FLAG_FLIP_H
 from .level import LevelManifest
+from .tileset import Tileset, builtin_tileset
 
 
 @dataclass
 class SyntheticLevel:
-    """Full-grid arrays before chunking. Indexed ``[y, x]``."""
+    """Full-grid cover arrays before chunking. Indexed ``[y, x]``.
+
+    ``terrain`` and ``overlay`` hold cover names (``""`` = empty); ``objects`` hold tile names.
+    """
 
     width: int
     height: int
     terrain: np.ndarray
     overlay: np.ndarray
-    objects: list[tuple[int, int, int, int]] = field(default_factory=list)  # (x, y, tile, flags)
+    objects: list[tuple[int, int, str, int]] = field(default_factory=list)  # (x, y, name, flags)
     elevation: np.ndarray | None = None
 
 
@@ -131,25 +138,26 @@ def generate(width: int, height: int, seed: int = 42) -> SyntheticLevel:
     moisture = fbm(rng, h, w, base_cell=max(w, h) // 6, octaves=3)
     lakes = fbm(rng, h, w, base_cell=max(w, h) // 10, octaves=2)
 
-    terrain = np.full((h, w), tiles.OCEANO, dtype=np.uint16)
-    terrain[land] = tiles.CAMPO
-    terrain[land & (moisture > 0.55)] = tiles.FLORESTA
-    terrain[land & (moisture < 0.33) & (elev > 0.1)] = tiles.SAVANA
-    terrain[land & (elev > 0.5)] = tiles.MONTANHA
+    terrain = empty_cover_grid(h, w)
+    terrain[:] = "oceano"
+    terrain[land] = "campo"
+    terrain[land & (moisture > 0.55)] = "floresta"
+    terrain[land & (moisture < 0.33) & (elev > 0.1)] = "savana"
+    terrain[land & (elev > 0.5)] = "montanha"
     inland = land & (elev > 0.08)
-    terrain[inland & (lakes < 0.22) & (elev < 0.5)] = tiles.AGUA
+    terrain[inland & (lakes < 0.22) & (elev < 0.5)] = "agua"
 
     # Coast: land cells with at least one ocean cell in the 4-neighbourhood become sand.
-    ocean = terrain == tiles.OCEANO
+    ocean = terrain == "oceano"
     near_ocean = np.zeros_like(ocean)
     near_ocean[1:, :] |= ocean[:-1, :]
     near_ocean[:-1, :] |= ocean[1:, :]
     near_ocean[:, 1:] |= ocean[:, :-1]
     near_ocean[:, :-1] |= ocean[:, 1:]
-    terrain[land & near_ocean & (terrain != tiles.AGUA)] = tiles.AREIA
+    terrain[land & near_ocean & (terrain != "agua")] = "areia"
 
     # --- urban patch: a small blob on a flat inland campo/floresta area ---------------------
-    flat = inland & (elev < 0.3) & np.isin(terrain, [tiles.CAMPO, tiles.FLORESTA, tiles.SAVANA])
+    flat = inland & (elev < 0.3) & np.isin(terrain, ["campo", "floresta", "savana"])
     flat_idx = np.flatnonzero(flat)
     urban_center: tuple[int, int] | None = None
     if flat_idx.size:
@@ -161,11 +169,11 @@ def generate(width: int, height: int, seed: int = 42) -> SyntheticLevel:
         urban_center = (ux, uy)
         r = max(3, min(w, h) // 40)
         blob = ((yy - uy) ** 2 + (xx - ux) ** 2 <= r**2) & flat
-        terrain[blob] = tiles.URBANO
+        terrain[blob] = "urbano"
 
-    overlay = np.zeros((h, w), dtype=np.uint16)
-    objects: list[tuple[int, int, int, int]] = []
-    land_idx = np.flatnonzero(land & (terrain != tiles.AGUA))
+    overlay = empty_cover_grid(h, w)
+    objects: list[tuple[int, int, str, int]] = []
+    land_idx = np.flatnonzero(land & (terrain != "agua"))
 
     # --- river: from the highest point, flow downhill to the sea ---------------------------
     # Greedy descent on raw elevation gets trapped in basins, so the potential subtracts the
@@ -175,8 +183,8 @@ def generate(width: int, height: int, seed: int = 42) -> SyntheticLevel:
         peak = np.unravel_index(int(np.argmax(np.where(land, elev, -np.inf))), (h, w))
         potential = elev - radial
         for x, y in _river_path(potential, land, (int(peak[0]), int(peak[1])), max_steps=4 * (w + h)):
-            if land[y, x] and terrain[y, x] not in (tiles.OCEANO,):
-                overlay[y, x] = tiles.RIO
+            if land[y, x] and terrain[y, x] not in ("oceano",):
+                overlay[y, x] = "rio"
 
     # --- roads: two lines across the land, through the city if there is one ----------------
     if land_idx.size >= 2:
@@ -189,40 +197,46 @@ def generate(width: int, height: int, seed: int = 42) -> SyntheticLevel:
         for _ in range(2):
             x1, y1 = pick()
             for x, y in _line_cells(hub[0], hub[1], x1, y1):
-                if land[y, x] and overlay[y, x] == 0:
-                    overlay[y, x] = tiles.RODOVIA
+                if land[y, x] and overlay[y, x] == EMPTY_COVER:
+                    overlay[y, x] = "rodovia"
 
     # --- objects: trees on forest, buildings/houses in the city ----------------------------
-    forest_cells = np.argwhere(terrain == tiles.FLORESTA)
+    forest_cells = np.argwhere(terrain == "floresta")
     keep = rng.random(len(forest_cells)) < 0.08
     for y, x in forest_cells[keep]:
         flags = OBJECT_FLAG_FLIP_H if rng.random() < 0.5 else 0
-        objects.append((int(x), int(y), tiles.ARVORE, flags))
-    urban_cells = np.argwhere(terrain == tiles.URBANO)
+        objects.append((int(x), int(y), "arvore", flags))
+    urban_cells = np.argwhere(terrain == "urbano")
     roll = rng.random(len(urban_cells))
     for (y, x), rv in zip(urban_cells, roll):
         if rv < 0.25:
-            objects.append((int(x), int(y), tiles.PREDIO, 0))
+            objects.append((int(x), int(y), "predio", 0))
         elif rv < 0.55:
-            objects.append((int(x), int(y), tiles.CASA, 0))
+            objects.append((int(x), int(y), "casa", 0))
 
     return SyntheticLevel(w, h, terrain, overlay, objects, elevation=elev)
 
 
-def chunkify(level: SyntheticLevel, manifest: LevelManifest) -> list[Chunk]:
-    """Split full-grid arrays into chunks. Trailing partial chunks are zero-padded."""
+def chunkify(level: SyntheticLevel, manifest: LevelManifest, tileset: Tileset | None = None) -> list[Chunk]:
+    """Resolve covers/names to tile ids through ``tileset`` and split into chunks.
+
+    Autotiling runs on the full grid (so masks see real neighbours, and the map border counts
+    as "same cover"); trailing partial chunks are then zero-padded.
+    """
+    if tileset is None:
+        tileset = builtin_tileset()
     cs = manifest.chunk_size
     H = manifest.chunks_y * cs
     W = manifest.chunks_x * cs
     terrain = np.zeros((H, W), dtype=np.uint16)
     overlay = np.zeros((H, W), dtype=np.uint16)
-    terrain[: level.height, : level.width] = level.terrain
-    overlay[: level.height, : level.width] = level.overlay
+    terrain[: level.height, : level.width] = apply_autotile(level.terrain, tileset, "terrain")
+    overlay[: level.height, : level.width] = apply_autotile(level.overlay, tileset, "overlay")
 
     per_chunk: dict[tuple[int, int], list[ChunkObject]] = {}
-    for x, y, tile, flags in level.objects:
+    for x, y, name, flags in level.objects:
         key = (x // cs, y // cs)
-        per_chunk.setdefault(key, []).append(ChunkObject(x % cs, y % cs, tile, flags))
+        per_chunk.setdefault(key, []).append(ChunkObject(x % cs, y % cs, tileset.object_id(name), flags))
 
     ps = pe = None
     if manifest.period_start is not None and manifest.period_end is not None:

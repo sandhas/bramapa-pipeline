@@ -1,0 +1,590 @@
+# Fixture de teste: placeholder bramapa-base + variantes de autotiling de agua/oceano
+# (ids 100+mascara e 120+mascara, como manda tileset.md). Mascara 15 cai no default (id base).
+
+spec_version = 0
+
+[tileset]
+id = "bramapa-test"
+version = "0.0.1-test"
+atlas = "atlas.png"
+tile_width = 64
+tile_height = 32
+cell_width = 64
+cell_height = 64
+license = "CC0-1.0"
+
+[[tiles]]
+id = 1
+name = "campo"
+class = "terrain"
+col = 0
+row = 0
+frames = 1
+fps = 0
+cover = "campo"
+
+[[tiles]]
+id = 2
+name = "agua"
+class = "terrain"
+col = 1
+row = 0
+frames = 4
+fps = 4
+cover = "agua"
+
+[[tiles]]
+id = 3
+name = "oceano"
+class = "terrain"
+col = 5
+row = 0
+frames = 4
+fps = 3
+cover = "oceano"
+
+[[tiles]]
+id = 4
+name = "floresta"
+class = "terrain"
+col = 9
+row = 0
+frames = 1
+fps = 0
+cover = "floresta"
+
+[[tiles]]
+id = 5
+name = "areia"
+class = "terrain"
+col = 10
+row = 0
+frames = 1
+fps = 0
+cover = "areia"
+
+[[tiles]]
+id = 6
+name = "urbano"
+class = "terrain"
+col = 11
+row = 0
+frames = 1
+fps = 0
+cover = "urbano"
+
+[[tiles]]
+id = 7
+name = "montanha"
+class = "terrain"
+col = 12
+row = 0
+frames = 1
+fps = 0
+cover = "montanha"
+
+[[tiles]]
+id = 8
+name = "savana"
+class = "terrain"
+col = 13
+row = 0
+frames = 1
+fps = 0
+cover = "savana"
+
+[[tiles]]
+id = 9
+name = "agricultura"
+class = "terrain"
+col = 14
+row = 0
+frames = 1
+fps = 0
+cover = "agricultura"
+
+[[tiles]]
+id = 10
+name = "pastagem"
+class = "terrain"
+col = 15
+row = 0
+frames = 1
+fps = 0
+cover = "pastagem"
+
+[[tiles]]
+id = 11
+name = "caatinga"
+class = "terrain"
+col = 16
+row = 0
+frames = 1
+fps = 0
+cover = "caatinga"
+
+[[tiles]]
+id = 12
+name = "pantanal"
+class = "terrain"
+col = 17
+row = 0
+frames = 1
+fps = 0
+cover = "pantanal"
+
+[[tiles]]
+id = 20
+name = "rodovia"
+class = "overlay"
+col = 0
+row = 1
+frames = 1
+fps = 0
+cover = "rodovia"
+
+[[tiles]]
+id = 21
+name = "rio"
+class = "overlay"
+col = 1
+row = 1
+frames = 4
+fps = 4
+cover = "rio"
+
+[[tiles]]
+id = 22
+name = "limite_estado"
+class = "overlay"
+col = 5
+row = 1
+frames = 1
+fps = 0
+cover = "limite_estado"
+
+[[tiles]]
+id = 23
+name = "limite_municipio"
+class = "overlay"
+col = 6
+row = 1
+frames = 1
+fps = 0
+cover = "limite_municipio"
+
+[[tiles]]
+id = 24
+name = "limite_pais"
+class = "overlay"
+col = 7
+row = 1
+frames = 1
+fps = 0
+cover = "limite_pais"
+
+[[tiles]]
+id = 25
+name = "ferrovia"
+class = "overlay"
+col = 8
+row = 1
+frames = 1
+fps = 0
+cover = "ferrovia"
+
+[[tiles]]
+id = 40
+name = "arvore"
+class = "object"
+col = 0
+row = 2
+frames = 1
+fps = 0
+
+[[tiles]]
+id = 41
+name = "predio"
+class = "object"
+col = 1
+row = 2
+frames = 1
+fps = 0
+
+[[tiles]]
+id = 42
+name = "casa"
+class = "object"
+col = 2
+row = 2
+frames = 1
+fps = 0
+
+[[tiles]]
+id = 100
+name = "agua_m00"
+class = "terrain"
+col = 0
+row = 3
+frames = 4
+fps = 4
+cover = "agua"
+
+[[tiles]]
+id = 101
+name = "agua_m01"
+class = "terrain"
+col = 4
+row = 3
+frames = 4
+fps = 4
+cover = "agua"
+
+[[tiles]]
+id = 102
+name = "agua_m02"
+class = "terrain"
+col = 8
+row = 3
+frames = 4
+fps = 4
+cover = "agua"
+
+[[tiles]]
+id = 103
+name = "agua_m03"
+class = "terrain"
+col = 12
+row = 3
+frames = 4
+fps = 4
+cover = "agua"
+
+[[tiles]]
+id = 104
+name = "agua_m04"
+class = "terrain"
+col = 16
+row = 3
+frames = 4
+fps = 4
+cover = "agua"
+
+[[tiles]]
+id = 105
+name = "agua_m05"
+class = "terrain"
+col = 20
+row = 3
+frames = 4
+fps = 4
+cover = "agua"
+
+[[tiles]]
+id = 106
+name = "agua_m06"
+class = "terrain"
+col = 24
+row = 3
+frames = 4
+fps = 4
+cover = "agua"
+
+[[tiles]]
+id = 107
+name = "agua_m07"
+class = "terrain"
+col = 28
+row = 3
+frames = 4
+fps = 4
+cover = "agua"
+
+[[tiles]]
+id = 108
+name = "agua_m08"
+class = "terrain"
+col = 0
+row = 4
+frames = 4
+fps = 4
+cover = "agua"
+
+[[tiles]]
+id = 109
+name = "agua_m09"
+class = "terrain"
+col = 4
+row = 4
+frames = 4
+fps = 4
+cover = "agua"
+
+[[tiles]]
+id = 110
+name = "agua_m10"
+class = "terrain"
+col = 8
+row = 4
+frames = 4
+fps = 4
+cover = "agua"
+
+[[tiles]]
+id = 111
+name = "agua_m11"
+class = "terrain"
+col = 12
+row = 4
+frames = 4
+fps = 4
+cover = "agua"
+
+[[tiles]]
+id = 112
+name = "agua_m12"
+class = "terrain"
+col = 16
+row = 4
+frames = 4
+fps = 4
+cover = "agua"
+
+[[tiles]]
+id = 113
+name = "agua_m13"
+class = "terrain"
+col = 20
+row = 4
+frames = 4
+fps = 4
+cover = "agua"
+
+[[tiles]]
+id = 114
+name = "agua_m14"
+class = "terrain"
+col = 24
+row = 4
+frames = 4
+fps = 4
+cover = "agua"
+
+[[tiles]]
+id = 115
+name = "agua_m15"
+class = "terrain"
+col = 28
+row = 4
+frames = 4
+fps = 4
+cover = "agua"
+
+[[tiles]]
+id = 120
+name = "oceano_m00"
+class = "terrain"
+col = 0
+row = 4
+frames = 4
+fps = 4
+cover = "oceano"
+
+[[tiles]]
+id = 121
+name = "oceano_m01"
+class = "terrain"
+col = 4
+row = 4
+frames = 4
+fps = 4
+cover = "oceano"
+
+[[tiles]]
+id = 122
+name = "oceano_m02"
+class = "terrain"
+col = 8
+row = 4
+frames = 4
+fps = 4
+cover = "oceano"
+
+[[tiles]]
+id = 123
+name = "oceano_m03"
+class = "terrain"
+col = 12
+row = 4
+frames = 4
+fps = 4
+cover = "oceano"
+
+[[tiles]]
+id = 124
+name = "oceano_m04"
+class = "terrain"
+col = 16
+row = 4
+frames = 4
+fps = 4
+cover = "oceano"
+
+[[tiles]]
+id = 125
+name = "oceano_m05"
+class = "terrain"
+col = 20
+row = 4
+frames = 4
+fps = 4
+cover = "oceano"
+
+[[tiles]]
+id = 126
+name = "oceano_m06"
+class = "terrain"
+col = 24
+row = 4
+frames = 4
+fps = 4
+cover = "oceano"
+
+[[tiles]]
+id = 127
+name = "oceano_m07"
+class = "terrain"
+col = 28
+row = 4
+frames = 4
+fps = 4
+cover = "oceano"
+
+[[tiles]]
+id = 128
+name = "oceano_m08"
+class = "terrain"
+col = 0
+row = 5
+frames = 4
+fps = 4
+cover = "oceano"
+
+[[tiles]]
+id = 129
+name = "oceano_m09"
+class = "terrain"
+col = 4
+row = 5
+frames = 4
+fps = 4
+cover = "oceano"
+
+[[tiles]]
+id = 130
+name = "oceano_m10"
+class = "terrain"
+col = 8
+row = 5
+frames = 4
+fps = 4
+cover = "oceano"
+
+[[tiles]]
+id = 131
+name = "oceano_m11"
+class = "terrain"
+col = 12
+row = 5
+frames = 4
+fps = 4
+cover = "oceano"
+
+[[tiles]]
+id = 132
+name = "oceano_m12"
+class = "terrain"
+col = 16
+row = 5
+frames = 4
+fps = 4
+cover = "oceano"
+
+[[tiles]]
+id = 133
+name = "oceano_m13"
+class = "terrain"
+col = 20
+row = 5
+frames = 4
+fps = 4
+cover = "oceano"
+
+[[tiles]]
+id = 134
+name = "oceano_m14"
+class = "terrain"
+col = 24
+row = 5
+frames = 4
+fps = 4
+cover = "oceano"
+
+[[tiles]]
+id = 135
+name = "oceano_m15"
+class = "terrain"
+col = 28
+row = 5
+frames = 4
+fps = 4
+cover = "oceano"
+
+[[autotile]]
+cover = "agua"
+default = 2
+[autotile.masks]
+"0" = 100
+"1" = 101
+"2" = 102
+"3" = 103
+"4" = 104
+"5" = 105
+"6" = 106
+"7" = 107
+"8" = 108
+"9" = 109
+"10" = 110
+"11" = 111
+"12" = 112
+"13" = 113
+"14" = 114
+
+[[autotile]]
+cover = "oceano"
+default = 3
+[autotile.masks]
+"0" = 120
+"1" = 121
+"2" = 122
+"3" = 123
+"4" = 124
+"5" = 125
+"6" = 126
+"7" = 127
+"8" = 128
+"9" = 129
+"10" = 130
+"11" = 131
+"12" = 132
+"13" = 133
+"14" = 134
+
+[[autotile]]
+cover = "rio"
+default = 21
+[autotile.masks]
+"0" = 21
+"5" = 21
+"10" = 21
+"15" = 21

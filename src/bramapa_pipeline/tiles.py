@@ -72,3 +72,6 @@ ALL_NAMES: dict[int, str] = {EMPTY: "vazio", **TERRAIN_NAMES, **OVERLAY_NAMES, *
 def tile_name(tile_id: int) -> str:
     """Human-readable name for a placeholder tile id (``"?<id>"`` if unknown)."""
     return ALL_NAMES.get(tile_id, f"?{tile_id}")
+
+ALL_NAMES_INV: dict[str, int] = {name: tile_id for tile_id, name in ALL_NAMES.items()}
+"""Inverse of :data:`ALL_NAMES` (``"vazio"`` -> 0)."""

@@ -9,16 +9,39 @@ from typing import Annotated
 import numpy as np
 import typer
 
-from . import SPEC_VERSION, tiles
+from . import SPEC_VERSION
+from .autotile import apply_autotile, describe_masks, empty_cover_grid
 from .chunk import HEADER_SIZE, Chunk, chunk_filename, days_to_date, read_chunk, read_header, write_chunk
 from .level import LevelManifest, read_level_toml, write_level_toml
 from .synth import chunkify, generate
+from .tileset import Tileset, TilesetError, builtin_tileset, load_tileset
 
 app = typer.Typer(
     help="Pipeline offline do Bramapa: gera e inspeciona chunks de tiles (.bmc).",
     no_args_is_help=True,
     add_completion=False,
 )
+
+TilesetOpt = Annotated[
+    Path | None,
+    typer.Option(
+        "--tileset",
+        help="Diretório do tileset (com tiles.toml). Sem ele, usa os ids provisórios embutidos.",
+        exists=True,
+        file_okay=True,
+        dir_okay=True,
+    ),
+]
+
+
+def _load_tileset(path: Path | None) -> Tileset:
+    if path is None:
+        return builtin_tileset()
+    try:
+        return load_tileset(path)
+    except TilesetError as e:
+        typer.echo(f"tileset inválido ({path}): {e}", err=True)
+        raise typer.Exit(code=2) from e
 
 
 @app.command("chunk-test")
@@ -27,8 +50,14 @@ def chunk_test(
     width: Annotated[int, typer.Option(help="Largura da grade em células.")] = 256,
     height: Annotated[int, typer.Option(help="Altura da grade em células.")] = 256,
     seed: Annotated[int, typer.Option(help="Semente do gerador sintético.")] = 42,
+    tileset: TilesetOpt = None,
 ) -> None:
-    """Escreve um nível sintético completo (level.toml + um .bmc por chunk) para testar o motor."""
+    """Escreve um nível sintético completo (level.toml + um .bmc por chunk) para testar o motor.
+
+    Com --tileset, os ids vêm do tiles.toml indicado (autotiling incluído) e o level.toml aponta
+    para esse tileset; sem ele, usa os ids provisórios embutidos (bramapa-base@0.0.1).
+    """
+    ts = _load_tileset(tileset)
     manifest = LevelManifest(
         level=1,
         entity="pais:BR",
@@ -37,11 +66,11 @@ def chunk_test(
         height=height,
         cell_meters=8000.0,
         crs="EPSG:5880",
-        tileset_id="bramapa-base",
-        tileset_version="0.0.1",
+        tileset_id=ts.id,
+        tileset_version=ts.version,
     )
     level = generate(width, height, seed=seed)
-    chunks = chunkify(level, manifest)
+    chunks = chunkify(level, manifest, ts)
 
     out.mkdir(parents=True, exist_ok=True)
     write_level_toml(out / "level.toml", manifest)
@@ -54,14 +83,15 @@ def chunk_test(
     n_obj = len(level.objects)
     typer.echo(
         f"{out}: {width}x{height} células, {manifest.chunks_x}x{manifest.chunks_y} chunks "
-        f"({len(chunks)} arquivos, {total_bytes / 1024:.1f} KiB), {n_obj} objetos, seed={seed}"
+        f"({len(chunks)} arquivos, {total_bytes / 1024:.1f} KiB), {n_obj} objetos, seed={seed}, "
+        f"tileset={ts.id}@{ts.version}{' (embutido)' if tileset is None else ''}"
     )
 
 
-def _layer_stats(arr: np.ndarray, names: dict[int, str]) -> str:
+def _layer_stats(arr: np.ndarray, ts: Tileset) -> str:
     nonzero = arr[arr != 0]
     ids = sorted(np.unique(nonzero).tolist())
-    label = ", ".join(f"{i}={names.get(i, tiles.tile_name(i))}" for i in ids) or "-"
+    label = ", ".join(f"{i}={ts.tile_name(i)}" for i in ids) or "-"
     return f"{int(nonzero.size)} células não vazias; ids: {label}"
 
 
@@ -70,7 +100,7 @@ def _fmt_period(days: int) -> str:
     return f"{days} ({d.isoformat()})" if d is not None else f"{days} (sem período)"
 
 
-def inspect_file(path: Path) -> None:
+def inspect_file(path: Path, ts: Tileset) -> None:
     h = read_header(path)
     size = path.stat().st_size
     typer.echo(f"{path}  ({size} bytes = {HEADER_SIZE} cabeçalho + {h.payload_len} carga zstd)")
@@ -84,17 +114,17 @@ def inspect_file(path: Path) -> None:
     typer.echo(f"  period_end    = {_fmt_period(h.period_end)}")
     typer.echo(f"  payload_len   = {h.payload_len}")
     ch: Chunk = read_chunk(path)
-    typer.echo(f"  terrain : {_layer_stats(ch.terrain, tiles.TERRAIN_NAMES)}")
-    typer.echo(f"  overlay : {_layer_stats(ch.overlay, tiles.OVERLAY_NAMES)}")
+    typer.echo(f"  terrain : {_layer_stats(ch.terrain, ts)}")
+    typer.echo(f"  overlay : {_layer_stats(ch.overlay, ts)}")
     if ch.has_objects:
         counts = Counter(o.tile_id for o in ch.objects)
-        label = ", ".join(f"{i}={tiles.tile_name(i)}×{n}" for i, n in sorted(counts.items()))
+        label = ", ".join(f"{i}={ts.tile_name(i)}×{n}" for i, n in sorted(counts.items()))
         typer.echo(f"  objects : {len(ch.objects)} ({label})")
     else:
         typer.echo("  objects : (camada ausente)")
 
 
-def inspect_level(level_dir: Path) -> None:
+def inspect_level(level_dir: Path, ts: Tileset) -> None:
     manifest_path = level_dir / "level.toml"
     if manifest_path.exists():
         m = read_level_toml(manifest_path)
@@ -142,7 +172,7 @@ def inspect_level(level_dir: Path) -> None:
         f"  {'tot':>4} {len(files):>4} {tot_bytes:>7} {tot_terrain:>8} {tot_overlay:>8} {tot_objects:>8}"
     )
     typer.echo("")
-    typer.echo("  tiles usados: " + ", ".join(f"{i}={tiles.tile_name(i)}" for i in sorted(all_ids)))
+    typer.echo("  tiles usados: " + ", ".join(f"{i}={ts.tile_name(i)}" for i in sorted(all_ids)))
     if expected:
         missing = sorted(expected - seen)
         extra = sorted(seen - expected)
@@ -157,15 +187,63 @@ def inspect_level(level_dir: Path) -> None:
 @app.command("inspect")
 def inspect(
     path: Annotated[Path, typer.Argument(help="Um arquivo .bmc ou o diretório de um nível.")],
+    tileset: TilesetOpt = None,
 ) -> None:
-    """Mostra cabeçalho e estatísticas de um chunk, ou um resumo de todos os chunks de um nível."""
+    """Mostra cabeçalho e estatísticas de um chunk, ou um resumo de todos os chunks de um nível.
+
+    Com --tileset, os ids são nomeados pelo tiles.toml indicado (variantes de autotiling incluídas).
+    """
     if not path.exists():
         typer.echo(f"não existe: {path}", err=True)
         raise typer.Exit(code=2)
+    ts = _load_tileset(tileset)
     if path.is_dir():
-        inspect_level(path)
+        inspect_level(path, ts)
     else:
-        inspect_file(path)
+        inspect_file(path, ts)
+
+
+@app.command("autotile-demo")
+def autotile_demo(
+    tileset: TilesetOpt = None,
+    cover: Annotated[str, typer.Option(help="Cobertura do lago.")] = "agua",
+    around: Annotated[str, typer.Option(help="Cobertura ao redor.")] = "campo",
+) -> None:
+    """Desenha um lago pequeno e mostra a máscara de vizinhança e o id escolhido por célula.
+
+    Máscara: N=1 E=2 S=4 W=8, bit ligado = vizinho com a mesma cobertura; fora da grade = igual.
+    """
+    ts = _load_tileset(tileset)
+    grid = empty_cover_grid(7, 11)
+    grid[:] = around
+    grid[1:6, 2:9] = cover  # a 7x5 lake...
+    grid[1, 2] = grid[1, 8] = grid[5, 2] = grid[5, 8] = around  # ...with rounded corners
+    grid[3, 4:6] = around  # and an island
+    grid[2, 9] = grid[3, 9] = cover  # a bay poking east
+    grid[0, 5] = cover  # and a cell touching the border (north counts as "same")
+    try:
+        ids = apply_autotile(grid, ts, "terrain")
+    except TilesetError as e:
+        typer.echo(f"erro: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    rule = ts.autotile.get(cover)
+    typer.echo(
+        f"tileset {ts.id}@{ts.version}; cover {cover!r}: "
+        + (
+            f"default={rule.default}, {len(rule.masks)} máscaras explícitas"
+            if rule
+            else "sem regra [[autotile]], id único"
+        )
+    )
+    typer.echo("")
+    typer.echo("máscara (hex, N=1 E=2 S=4 W=8)   id do tile")
+    sel = grid == cover
+    for mrow, idrow, srow in zip(describe_masks(grid, cover), ids, sel):
+        idtxt = " ".join(f"{int(i):>3}" if c else "  ." for i, c in zip(idrow, srow))
+        typer.echo(f"  {mrow}   {idtxt}")
+    used = sorted(set(int(i) for i in ids[sel].tolist()))
+    typer.echo("")
+    typer.echo("ids usados pelo lago: " + ", ".join(f"{i}={ts.tile_name(i)}" for i in used))
 
 
 @app.command("version")
